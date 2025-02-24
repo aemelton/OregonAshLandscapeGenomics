@@ -133,9 +133,11 @@ packages <- c("adegenet",
 
 library(colorRamps)
 library(data.table)
+library(dartR)
 library(elevatr)
 library(gbs2ploidy)
 library(gdm)
+library(geodata)
 library(geosphere)
 # library(ggcorrplot)
 library(ggforce)
@@ -153,10 +155,13 @@ library(maps)
 library(patchwork)
 library(pophelper)
 library(poppr)
+library(raster)
 library(reshape2)
 library(scales)
 library(scatterpie)
 library(SNPRelate)
+library(sp)
+library(spatstat)
 library(strataG)
 library(tidyverse)
 library(vcfR)
@@ -281,11 +286,11 @@ nrow(sampleData) # Total number of samples
 
 # Requires a CSV file with population ID and sample size per population.
 setwd(project.folder)
-Pop_Sum <- read.csv("1_FRLA_data/all/data/allPop_Sum.csv", header = T) 
+Pop_Sum <- read.csv("0_FRLA_data/all/data/allPop_Sum.csv", header = T) 
 nrow(Pop_Sum) # Total number of populations
 sort(Pop_Sum$Pop) # List of population names
 
-sampleData <- read.csv("1_FRLA_data/all/data/allPop_ID_Sum.csv", header = T)
+sampleData <- read.csv("0_FRLA_data/all/data/allPop_ID_Sum.csv", header = T)
 nrow(sampleData) # Total number of samples
 
 #### Climatic data processing ####
@@ -383,10 +388,14 @@ pop.tab <- read.csv("0_Data/Pop_Sum_env.csv", header = T) # This table has
 ###### If pop file has a *notes* column ######
 # pop.tab <- pop.tab[,-ncol(pop.tab)] # Drop the last column, which has notes and not data
 
+pop.tab <- read.csv("~/Dropbox/PennStateU/Research/1_Fraxinus_latifolia_PopGen/0_FRLA_data/nPopTabTF.csv")
+head(pop.tab)
 colnames(pop.tab) <- c("State",
                        "Population",
                        "Longitude",
                        "Latitude",
+                       "Elevation (m)",
+                       "N",
                        "n",
                        "FFP",
                        "MAP",
@@ -394,11 +403,12 @@ colnames(pop.tab) <- c("State",
                        "PAS",
                        "RH",
                        "TD",
-                       "Elevation (m)")
+                       "Color code")
 
-pop.tab <- pop.tab[order(pop.tab$Pop, decreasing = F),]
 
-pop.tab$'Color code' <- my.cols.test # add color palette to the data frame to make
+# pop.tab <- pop.tab[order(pop.tab$Population, decreasing = F),]
+
+pop.tab$'Color code' <- my.cols # add color palette to the data frame to make
 # keeping all the pieces together easier
 
 # Order by latitude
@@ -407,18 +417,20 @@ pop.tab <- pop.tab[order(pop.tab$Latitude, decreasing = T),]
 pop.tab$Population <- factor(pop.tab$Population, levels=unique(pop.tab$Population))
 
 pop.tab$`Elevation (m)` <- signif(x = pop.tab$`Elevation (m)`, digits = 2)
-pop.tab$Latitude <- signif(x = pop.tab$Latitude, digits = 5)
+pop.tab$Latitude <- signif(x = pop.tab$Latitude, digits = 4)
 pop.tab$Longitude <- signif(x = pop.tab$Longitude, digits = 5)
+
+head(pop.tab)
 
 #
 tt <- ttheme_minimal(
   core=list(bg_params = list(fill = pop.tab$`Color code`, col=NA),
-            fg_params=list(fontface=1)),
+            fg_params=list(fontface=c(rep("plain",55), rep("bold", 6)))),
   colhead=list(fg_params=list(col="black", fontface=1L)),
   rowhead=list(fg_params=list(col="black", fontface=1L)))
 
 ##### Plot; Table S1 #####
-pdf("0_Data/Population_and_ColorCode.pdf", height = 18, width = 12) # Check dimensions for your data!
+pdf("~/Dropbox/Manuscripts/PSU/1_OregonAshPopGen/Population_and_ColorCodev3.pdf", height = 18, width = 12) # Check dimensions for your data!
 grid.arrange(tableGrob(pop.tab, theme=tt, rows = NULL))
 dev.off()
 ####
@@ -717,65 +729,110 @@ dev.off()
 
 
 #### Spatial genetic structure ####
-Pop_Sum <- read.csv("1_FRLA_data/all/data/allPop_Sum.csv")
+Pop_Sum <- read.csv("0_FRLA_data/all/data/allPop_Sum.csv")
 
 sort(Pop_Sum$Pop)
 sort(unique(SampleData$Pop)) 
 
 #### Create map with ALL populations ####
 # No shapefile for the test data as this species has an unknown range.
-fralat <- shapefile("~/Downloads/Oregon ash (Fraxinus latifolia) extent, North America/data/commondata/data0/fraxlati.shp")
+fralat <- shapefile("Oregon ash (Fraxinus latifolia) extent, North America/Oregon ash (Fraxinus latifolia) extent, North America/commondata/data0/fraxlati.shp")
 
 df.sp <- spTransform(fralat, CRS("+proj=longlat +init=epsg:3857"))
 
-# Set up a google maps account and register your KEY
-register_google(key = "KEY", write = TRUE)
+us <- gadm(country = "USA", level = 1, resolution = 2,
+           path = "maps/")
+canada <- gadm(country = "CAN", level = 1, resolution = 2,
+               path = "maps")
 
-# map <- get_googlemap(center = c(-123,42.25),
+plot(us, lwd = 2)
+plot(canada, add = TRUE)
+
+CanUS <- rbind(us, canada)
+CanUS.reformat <- sf::st_as_sf(CanUS)
+
+# Set up a google maps account and register your KEY
+# register_google(key = "KEY", write = TRUE)
+# 
+# # map <- get_googlemap(center = c(-123,42.25),
+# #                      zoom = 5,
+# #                      size = c(600,600),
+# #                      maptype = "satellite")
+# 
+# map <- get_googlemap(center = c(-85,35),
 #                      zoom = 5,
 #                      size = c(600,600),
 #                      maptype = "satellite")
+# 
+# mapplot <- ggmap(map) +
+#   # geom_polygon(data = df.sp,
+#   #              aes(x = long, y = lat, group = group),
+#   #              fill = "grey", colour = "darkgrey", alpha = 0.33) +
+#   geom_point(data = Pop_Sum, aes(x = Longitude,
+#      y = Latitude),
+#      size = 2,
+#      col = "black",
+#      fill = "white",
+#      pch = 21) +
+#   geom_label_repel(data = Pop_Sum,
+#      aes(x = Longitude,
+#       y = Latitude,
+#       label = Population,
+#       fill = Population),
+#      box.padding = 0,
+#      size = 1.5,
+#      max.overlaps = 20,
+#      colour = "black",
+#      fontface = "bold") +
+#   scale_fill_manual(name = "Population:", values = my.cols.test) +
+#   xlab("Longitude") + 
+#   ylab("Latitude") + 
+#   
+#   # scale_x_continuous(limits = c(-125, -117.5), expand = c(0, 0)) +
+#   # scale_y_continuous(limits = c(33.5, 49), expand = c(0, 0)) +
+#   scale_x_continuous(limits = c(-90, -75), expand = c(0, 0)) +
+#   scale_y_continuous(limits = c(25, 45), expand = c(0, 0)) +
+#   theme_bw() + 
+#   #scale_size_area(c(3,20)) +
+#   theme(axis.text = element_text(size = 12),
+#     axis.title = element_text(size = 15, colour = "black", face = "bold"),
+#     panel.border = element_rect(linewidth = 1, colour = "black"),
+#     legend.text = element_text(size = 10), legend.position = "none",
+#     legend.title = element_text(size = 12, face = "bold"), panel.grid = element_blank())
 
-map <- get_googlemap(center = c(-85,35),
-                     zoom = 5,
-                     size = c(600,600),
-                     maptype = "satellite")
-
-mapplot <- ggmap(map) +
-  # geom_polygon(data = df.sp,
-  #              aes(x = long, y = lat, group = group),
-  #              fill = "grey", colour = "darkgrey", alpha = 0.33) +
+mapplot <- ggplot(CanUS.reformat) +
+  geom_sf(fill = "white") +
+  geom_polygon(data = df.sp,
+               aes(x = long, y = lat, group = group),
+               fill = "grey", colour = "darkgrey", alpha = 0.33) +
   geom_point(data = Pop_Sum, aes(x = Longitude,
-     y = Latitude),
-     size = 2,
-     col = "black",
-     fill = "white",
-     pch = 21) +
+                                 y = Latitude),
+             size = 2,
+             col = "black",
+             fill = "white",
+             pch = 21) +
   geom_label_repel(data = Pop_Sum,
-     aes(x = Longitude,
-      y = Latitude,
-      label = Population,
-      fill = Population),
-     box.padding = 0,
-     size = 1.5,
-     max.overlaps = 20,
-     colour = "black",
-     fontface = "bold") +
-  scale_fill_manual(name = "Population:", values = my.cols.test) +
+                   aes(x = Longitude,
+                       y = Latitude,
+                       label = Pop,
+                       fill = Pop),
+                   box.padding = 0,
+                   size = 1.5,
+                   max.overlaps = 20,
+                   colour = "black",
+                   fontface = "bold") +
+  scale_fill_manual(name = "Population:", values = my.cols) +
   xlab("Longitude") + 
   ylab("Latitude") + 
-  
-  # scale_x_continuous(limits = c(-125, -117.5), expand = c(0, 0)) +
-  # scale_y_continuous(limits = c(33.5, 49), expand = c(0, 0)) +
-  scale_x_continuous(limits = c(-90, -75), expand = c(0, 0)) +
-  scale_y_continuous(limits = c(25, 45), expand = c(0, 0)) +
-  theme_bw() + 
-  #scale_size_area(c(3,20)) +
+  scale_x_continuous(limits = c(-125, -117.5), expand = c(0, 0), breaks = c(-124,-122,-120,-118)) +
+  scale_y_continuous(limits = c(33.5, 49), expand = c(0, 0)) +
+  theme_bw() +
   theme(axis.text = element_text(size = 12),
-    axis.title = element_text(size = 15, colour = "black", face = "bold"),
-    panel.border = element_rect(linewidth = 1, colour = "black"),
-    legend.text = element_text(size = 10), legend.position = "none",
-    legend.title = element_text(size = 12, face = "bold"), panel.grid = element_blank())
+        axis.title = element_text(size = 15, colour = "black", face = "bold"),
+        panel.border = element_rect(linewidth = 1, colour = "black"),
+        legend.text = element_text(size = 10), legend.position = "none",
+        legend.title = element_text(size = 12, face = "bold"), 
+        panel.grid = element_blank())
 
 mapplot
 
@@ -805,8 +862,8 @@ write.csv(a_pve, file = "2_SNP_PCA/a_pve.csv", row.names = F)
 snpgdsClose(genofile)
 
 ##### PCA plots for "All" #####
-a_pca_df <- read.csv("2_SNP_PCA/PCA_df.csv")
-a_pve <- unlist(read.csv("2_SNP_PCA/a_pve.csv"))
+a_pca_df <- read.csv("0_FRLA_data/all/data/all_pca_df_AEM.csv")
+a_pve <- unlist(read.csv("0_FRLA_data/all/data/a_pve.csv"))
 
 State <- NULL
 for (p in 1:nrow(Pop_Sum)) {
@@ -821,9 +878,9 @@ State
 a_pca_df$State <- State
 
 Apca12_pop <- ggplot(data = a_pca_df) +
-  geom_point(aes(x=PC1, y=PC2, fill=Population, shape=State), size = 3) + 
+  geom_point(aes(x=PC1, y=PC2, fill=Pop, shape=State), size = 3) + 
   scale_shape_manual(values = c(21,22,24,25), name = 'State') +
-  scale_fill_manual(values = my.cols.test, name = 'Population') +
+  scale_fill_manual(values = my.cols, name = 'Population') +
   xlab(paste("PC",1," (",a_pve[1]*100,"%)",sep="")) + 
   xlim(c(round(min(a_pca_df$PC1),2)-0.01, round(max(a_pca_df$PC1),2)+0.01)) + 
   ylab(paste("PC",2," (",a_pve[2]*100,"%)",sep="")) +
@@ -837,11 +894,12 @@ Apca12_pop <- ggplot(data = a_pca_df) +
         legend.title = element_text(size = 12, face = "bold"),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
+ggsave(filename = "10_PlotsForPaper/AllPC1-2.pdf", plot = Apca12_pop)
 
 Apca23_pop <- ggplot(data = a_pca_df) +
-  geom_point(aes(x=PC3, y=PC2, fill=Population, shape=State), size = 3) + 
+  geom_point(aes(x=PC3, y=PC2, fill=Pop, shape=State), size = 3) + 
   scale_shape_manual(values = c(21,22,24,25), name = 'State') +
-  scale_fill_manual(values = my.cols.test, name = 'Population') +
+  scale_fill_manual(values = my.cols, name = 'Population') +
   xlab(paste("PC",3," (",a_pve[3]*100,"%)",sep="")) + 
   xlim(c(round(min(a_pca_df$PC3),2)-0.01, round(max(a_pca_df$PC3),2)+0.01)) + 
   ylab(paste("PC",2," (",a_pve[2]*100,"%)",sep="")) +
@@ -856,6 +914,7 @@ Apca23_pop <- ggplot(data = a_pca_df) +
         legend.title = element_text(size = 12, face = "bold"),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
+ggsave(filename = "10_PlotsForPaper/AllPC2-3.pdf", plot = Apca23_pop)
 
 Apca34_pop <- ggplot(data = a_pca_df) +
   geom_point(aes(x=PC4, y=PC3, fill=Population, shape=State), size = 3) + 
@@ -875,12 +934,14 @@ Apca34_pop <- ggplot(data = a_pca_df) +
         legend.title = element_text(size = 12, face = "bold"),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
+ggsave(filename = "10_PlotsForPaper/AllPC3-4.pdf", plot = Apca34_pop)
+
 
 Apca12_pop.legend <- 
   ggplot(data = a_pca_df) +
-  geom_point(aes(x=PC1, y=PC2, color=Population, shape=State), size = 3) + 
+  geom_point(aes(x=PC1, y=PC2, shape=State), size = 3) + 
   scale_shape_manual(values = c(21,22,24,25), name = 'State') +
-  scale_color_manual(values = my.cols.test, name = 'Population') +
+  #scale_color_manual(values = my.cols, name = 'Population') +
   xlab(paste("PC",1," (",a_pve[1]*100,"%)",sep="")) + 
   xlim(c(round(min(a_pca_df$PC1),2)-0.01, round(max(a_pca_df$PC1),2)+0.01)) + 
   ylab(paste("PC",2," (",a_pve[2]*100,"%)",sep="")) +
@@ -904,10 +965,10 @@ legend.plot
 
 ##### Perform PCA for "North" #####
 # No subsets for test data
-sampleData <- read.csv("1_FRLA_data/north/data/nPop_ID_Sum.csv", header = T)
+sampleData <- read.csv("0_FRLA_data/north/data/nPop_ID_Sum.csv", header = T)
 nrow(sampleData)
 
-nPop_Sum <- read.csv("1_FRLA_data/north/data/nPop_Sum.csv")
+nPop_Sum <- read.csv("0_FRLA_data/north/data/nPop_Sum.csv")
 nrow(nPop_Sum)
 # sampleData$site <- paste0(sampleData$State, "_", sampleData$Pop) 
 
@@ -932,7 +993,7 @@ pca.grid <- ggarrange(Apca12_pop,
                       ncol = 1,
                       labels = c("B", "C")) #, "D", "E"
 
-pdf("2_SNP_PCA//Map_and_PCAs.pdf", width = 12) # Fig. 1
+pdf("10_PlotsForPaper/Map_and_PCAs_NoBG.pdf", width = 12) # Fig. 1
 grid.arrange(mapplot.g, pca.grid, legend.plot,
              ncol=3, 
              widths=c(1,2,1))
@@ -940,8 +1001,8 @@ dev.off()
 
 ##### PCA plots for "north" #####
 
-n_pca_df <- read.csv("1_FRLA_data/north/data/NorthPCA_df_AEM.csv")
-n_pve <- unlist(read.csv("1_FRLA_data/North/data/n_pve.csv"))
+n_pca_df <- read.csv("0_FRLA_data/north/data/NorthPCA_df_AEM.csv")
+n_pve <- unlist(read.csv("0_FRLA_data/North/data/n_pve.csv"))
 
 State <- NULL
 for (p in 1:nrow(nPop_Sum)) {
@@ -973,6 +1034,8 @@ Npca12_pop <- ggplot(data = n_pca_df) +
         legend.title = element_text(size = 12, face = "bold"),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
+ggsave(filename = "10_PlotsForPaper/NorthPC1-2.pdf", plot = Npca12_pop)
+
 
 Npca23_pop <-   ggplot(data = n_pca_df) +
   geom_point(aes(x=PC3, y=PC2, fill=Population, shape=State), size = 3) + 
@@ -992,6 +1055,7 @@ Npca23_pop <-   ggplot(data = n_pca_df) +
         legend.title = element_text(size = 12, face = "bold"),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
+ggsave(filename = "10_PlotsForPaper/NorthPC2-3.pdf", plot = Npca23_pop)
 
 ##### Generate gridded figure #####
 
@@ -1003,10 +1067,10 @@ pca.grid <- ggarrange(Apca12_pop,
                          ncol = 1,
                          labels = c("B", "C")) #, "D", "E"
 
-pdf("3_Plots/Map_and_PCAsV4.pdf", width = 12) # Fig. 1
-grid.arrange(mapplot.g, pca.grid, legend.plot,
-             ncol=3, 
-             widths=c(1,2,1))
+pdf("10_PlotsForPaper/Map_and_PCAsV6.pdf", width = 12) # Fig. 1
+grid.arrange(mapplot.g, pca.grid, #legend.plot,
+             ncol=2, 
+             widths=c(1,1))
 dev.off()
 
 
@@ -1448,6 +1512,137 @@ pw_plot
 ggsave('4_GeneticDiversity/Fst_NeiD_heatmap.pdf',height=26,width=30)
 ####
 
+##### Expected and observed Heterozygosity, Fis #####
+
+vcf.file <- "0_FRLA_data/north/FRLA_north_NoDGR.recode.vcf.gz" 
+vcf <- read.vcfR( vcf.file, verbose = FALSE )
+snp <- vcfR2genind(vcf)
+
+# You can access the data using the "@" sign:
+snp
+snp@pop <- as.factor(SampleData$Pop)
+snp.genlight <- dartR::gi2gl(snp)
+dartR.out <- dartR::gl.report.heterozygosity(x = snp.genlight)
+
+he.ho <- dartR.out$He/dartR.out$Ho
+
+write.csv(x = dartR.out, file = "dartR_out.csv", row.names = F)
+
+# Map stats
+Pop_Sum <- read.csv("0_FRLA_data/north/data/nPop_Sum.csv")
+
+sort(Pop_Sum$Pop)
+sort(unique(SampleData$Pop)) 
+
+Pop_Sum
+
+names(dartR.out)[names(dartR.out) == 'pop'] <- 'Pop'
+
+Pop_Sum <- Pop_Sum %>% 
+  left_join(dartR.out, by = c("Pop"))
+
+write.csv(Pop_Sum, "dartR_plus_PopSum.csv", row.names = F)
+
+
+##### Interpolate Ho across landscape #####
+Pop_Sum <- read.csv("dartR_plus_PopSum.csv")
+
+obs_window <- owin(xrange=c(-125, -120), yrange=c(38, 49))
+ppp_Ho<-ppp(Pop_Sum$Longitude,Pop_Sum$Latitude,
+                 marks=Pop_Sum$Ho,window=obs_window)
+
+idw_Ho <- idw(ppp_Ho, power=0.05, at="pixels")
+plot(idw_Ho,
+     col=heat.colors(20), 
+     main="Interpolated spatial variation in risk of Ho based on IDW method \n (Power = 0.05)") 
+idw_points <- idw(ppp_Ho, power = 0.05, at = "points")
+plot(idw_points, 
+     col=heat.colors(64))
+Metrics::mse(ppp_Ho$marks, idw_points)
+
+# Choose a power
+plot(idw(ppp_Ho, power=0.001, at="pixels"),col=heat.colors(20), main="power = 0.001") 
+plot(idw(ppp_Ho, power=0.01, at="pixels"),col=heat.colors(20), main="power = 0.01")
+plot(idw(ppp_Ho, power=0.1, at="pixels"),col=heat.colors(20), main="power = 0.1")
+plot(idw(ppp_Ho, power=1, at="pixels"),col=heat.colors(20), main="power = 1") 
+plot(idw(ppp_Ho, power=10, at="pixels"),col=heat.colors(20), main="power = 10") 
+
+powers <- seq(0.001, 10, 0.01)
+mse_result <- NULL
+for(power in powers){
+  CV_idw <- idw(ppp_Ho, power=power, at="points")
+  mse_result <- c(mse_result,
+                  Metrics::mse(ppp_Ho$marks,CV_idw))
+}
+optimal_power <- powers[which.min(mse_result)]
+optimal_power
+plot(powers, mse_result)
+
+# Convert to a raster
+idw_raster <- raster(idw(ppp_Ho, power=optimal_power, at="pixels"))
+
+fralat <- shapefile("Oregon ash (Fraxinus latifolia) extent, North America/Oregon ash (Fraxinus latifolia) extent, North America/commondata/data0/fraxlati.shp")
+
+fralat <- spTransform(fralat, CRS("+proj=longlat"))
+fc <- raster::crop(x = idw_raster, fralat)
+fc <- raster::mask(x = fc, mask = fralat)
+
+plot(fc)
+terra::writeRaster(x = fc, filename = "idw_raster.tiff")
+terra::writeRaster(x = idw_raster, filename = "idw_raster_full.tiff")
+
+##### Plot interpolated Ho #####
+idw_raster <- raster("idw_raster_full.tiff")
+fralat <- shapefile("Oregon ash (Fraxinus latifolia) extent, North America//Oregon ash (Fraxinus latifolia) extent, North America/commondata/data0/fraxlati.shp")
+
+df.sp <- spTransform(fralat, CRS("+proj=longlat +init=epsg:3857"))
+
+mybreaks <- c(-124,-122,-120)
+
+test_spdf <- as(idw.rast, "SpatialPixelsDataFrame")
+test_df <- as.data.frame(test_spdf)
+colnames(test_df) <- c("value", "x", "y")
+
+# plot
+pdf("10_PlotsForPaper/idw_NoCrop_ggplot.pdf")
+ggplot() +
+  # And here we have it
+  geom_sf(CanUS.reformat, mapping = aes(), fill = "white") +
+  coord_sf() +
+  # geom_polygon(data = df.sp,
+  #              aes(x = long, y = lat, group = group),
+  #              fill = "grey", colour = "darkgrey", alpha = 0.33) +
+  geom_point(data = Pop_Sum, aes(x = Longitude,
+                                 y = Latitude),
+             size = 2,
+             col = "black",
+             fill = "white",
+             pch = 23) +
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  theme_bw() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 15, colour = "black", face = "bold"),
+        panel.border = element_rect(linewidth = 1, colour = "black"),
+        legend.text = element_text(size = 10), #legend.position = "none",
+        legend.title = element_text(size = 12, face = "bold"), 
+        panel.grid = element_blank()) +
+  geom_tile(data=test_df, aes(x=x, y=y, fill=value), alpha=0.66) + 
+  scale_fill_viridis() +
+  #coord_equal() + 
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  scale_x_continuous(limits = c(-125, -120), expand = c(0, 0), breaks = c(-124,-122,-120)) +
+  scale_y_continuous(limits = c(38, 49), expand = c(0, 0)) +
+  labs(fill = "Interpolated Ho") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 15, colour = "black", face = "bold"),
+        panel.border = element_rect(linewidth = 1, colour = "black"),
+        legend.text = element_text(size = 10), #legend.position = "none",
+        legend.title = element_text(size = 12, face = "bold"), 
+        panel.grid = element_blank())
+dev.off()
 
 #### Estimating kinship and effective population size ####
 ##### SNPRelate relatedness metrics #####
@@ -1799,6 +1994,21 @@ ggarrange(MoM.plot, MLE.plot, StrataG,
           ncol = 1, nrow = 3)
 dev.off()
 
+#### Check correlations of Ne to kinship
+mle.avg <- ibd.MLE.all.samps %>%
+              group_by(Population) %>%
+              dplyr::summarize(mean(kinship))
+
+
+pdf("Ne_by_IBDMLE.pdf")
+plot(eff$Ne ~ mle.avg$`mean(kinship)`, 
+     ylab = "LD-Ne", 
+     xlab = "IBD-MLE",
+     pch = 19)
+dev.off()
+cor.test(eff$Ne, mle.avg$`mean(kinship)`)
+
+
 ####
 #### Estimating Effective Migration Surfaces (EEMS) ####
 ### ~~~ Write SNP data to plink format for EEMS analysis.
@@ -2132,10 +2342,10 @@ env <- read.csv("0_Data/env_samp.csv")
 names(env)
 nrow(env)
 
-env <- env[, c(4:ncol(env))]
+env <- env[, c(5:ncol(env))]
 
 # run rda with no conditioning
-m <- rda(formula = normalize ~ ., scale = FALSE, data = env)
+m <- rda(formula = df012 ~ ., scale = FALSE, data = env)
 summary(m)
 
 saveRDS(m, file = "7_GEA/RDA_latlong.RDS") # Save the RDA model
@@ -2186,14 +2396,14 @@ R.sum$cont$importance[2, "RDA2"]
 
 ##### RDA plot #####
 # genetic data 
-m <- readRDS("7_GEA/RDA_latlong.RDS")
+m <- readRDS("0_FRLA_data/north/nRDA_latlong.RDS")
 sampleData <- read.csv("0_Data/SampleData_5pop_25samp_550snp.csv")
 
 pca_df <- read.csv("2_SNP_PCA/PCA_df.csv")
 
 rda_df <- data.frame(State=as.character(sampleData$State),
-                     Population = as.character(sampleData$Population),
-                     ID=as.character(sampleData$sample))
+                     Population = as.character(sampleData$Pop),
+                     ID=as.character(sampleData$All))
 
 m_sum_pve <- summary(m)
 RDA1_pve <- paste("RDA1 (",round((m_sum_pve$concont$importance[2,1]*100),digits=2),"%)", sep="")
@@ -2249,12 +2459,12 @@ mult34 <- getMult(m,choices = c(3,4))
 rda12_plot <- ggplot(data=rda_indv) + 
   geom_point(data=rda_indv, aes(x=RDA2, y=RDA1,shape=State,fill=Population),size=3) +
   scale_shape_manual(values = c(21,22,24,25), name = 'State') +
-  scale_fill_manual(values = my.cols.test, name = 'Population') +
+  scale_fill_manual(values = my.cols.north, name = 'Population') +
   geom_segment(data = rda_biplot,
-               aes(x = 0, xend = mult12 * RDA2,y = 0, yend = mult12 * RDA1),
+               aes(x = 0, xend = mult12 * RDA2,y = 0, yend = (mult12 * RDA1 * -1)),
                arrow = arrow(length = unit(0.25, "cm")), colour = "darkgrey") + #grid is required for arrow to work.
   geom_label_repel(data = rda_biplot,
-                   aes(x= (mult12 + mult12/8) * RDA2, y = (mult12 + mult12/8) * RDA1, #we add 10% to the text to push it slightly out from arrows
+                   aes(x= (mult12 + mult12/8) * RDA2, y = ((mult12 + mult12/8) * RDA1 * -1), #we add 10% to the text to push it slightly out from arrows
                        label = var), #otherwise you could use hjust and vjust. I prefer this option
                    size = 4,fontface = "bold") + 
   xlab(RDA2_pve) +
@@ -2270,11 +2480,12 @@ rda12_plot <- ggplot(data=rda_indv) +
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
 rda12_plot  
+ggsave(filename = "PLOTFOLDERNAME/RDA1-2.pdf", plot = rda12_plot) 
 
 rda34_plot <- ggplot(data=rda_indv) + 
   geom_point(data=rda_indv, aes(x=RDA4, y=RDA3*-1,shape=State,fill=Population),size=3) +
   scale_shape_manual(values = c(21,22,24,25), name = 'State') +
-  scale_fill_manual(values = my.cols.test, name = 'Population') +
+  scale_fill_manual(values = my.cols.north, name = 'Population') +
   geom_segment(data = rda_biplot,
                aes(x = 0, xend = mult34 * RDA4,y = 0, yend = mult34 * RDA3*-1),
                arrow = arrow(length = unit(0.25, "cm")), colour = "darkgrey") + #grid is required for arrow to work.
@@ -2295,8 +2506,11 @@ rda34_plot <- ggplot(data=rda_indv) +
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
 rda34_plot 
+ggsave(filename = "PLOTFOLDERNAME/RDA3-4.pdf", plot = rda34_plot) 
 
-rda.plots <- ggarrange(rda12_plot,rda34_plot, ncol = 1, labels = c("B", "C"))
+
+rda.plots <- ggarrange(rda12_plot,rda34_plot, ncol = 2, labels = c("A", "B"))
+ggsave(filename = "10_PlotsForPaper/RDAs_Only.pdf", plot = rda.plots)
 
 Pop_Sum <- read.csv("0_Data/Pop_Sum.csv", header = T)
 nrow(Pop_Sum)
@@ -2305,41 +2519,41 @@ sort(Pop_Sum$Population)
 # map <- get_stamenmap(bbox = c(left = -125, bottom = 38, right = -120,
 #                                top = 49), zoom = 7, maptype = "terrain")
 
-map <- get_googlemap(c(-123,43.75), zoom = 5, size = c(400,400), maptype = "satellite") # %>% ggmap()
+# map <- get_googlemap(c(-123,43.75), zoom = 5, size = c(400,400), maptype = "satellite") # %>% ggmap()
+# 
+# mapplot <- ggmap(map) +
+#   geom_point(data = nPop_Sum, aes(x = Longitude,
+#                                   y = Latitude),
+#              size = 2,
+#              col = "black",
+#              fill = "white",
+#              pch = 21) +
+#   geom_label_repel(data = nPop_Sum,
+#                    aes(x = Longitude,
+#                        y = Latitude,
+#                        label = Pop,
+#                        fill = Pop),
+#                    box.padding = 0,
+#                    size = 1.5,
+#                    max.overlaps = 25,
+#                    colour = "black",
+#                    fontface = "bold") +
+#   scale_fill_manual(name = "Population:", values = my.cols.north) +
+#   xlab("Longitude") + 
+#   ylab("Latitude") + 
+#   theme_bw() + 
+#   scale_x_continuous(limits = c(-125, -120), expand = c(0, 0)) +
+#   scale_y_continuous(limits = c(38, 49), expand = c(0, 0)) +
+#   theme(axis.text = element_text(size = 12),
+#         axis.title = element_text(size = 15, colour = "black", face = "bold"),
+#         panel.border = element_rect(linewidth = 1, colour = "black"),
+#         legend.text = element_text(size = 10), legend.position = "none",
+#         legend.title = element_text(size = 12, face = "bold"), panel.grid = element_blank())
 
-mapplot <- ggmap(map) +
-  geom_point(data = nPop_Sum, aes(x = Longitude,
-                                  y = Latitude),
-             size = 2,
-             col = "black",
-             fill = "white",
-             pch = 21) +
-  geom_label_repel(data = nPop_Sum,
-                   aes(x = Longitude,
-                       y = Latitude,
-                       label = Pop,
-                       fill = Pop),
-                   box.padding = 0,
-                   size = 1.5,
-                   max.overlaps = 25,
-                   colour = "black",
-                   fontface = "bold") +
-  scale_fill_manual(name = "Population:", values = my.cols.north) +
-  xlab("Longitude") + 
-  ylab("Latitude") + 
-  theme_bw() + 
-  scale_x_continuous(limits = c(-125, -120), expand = c(0, 0)) +
-  scale_y_continuous(limits = c(38, 49), expand = c(0, 0)) +
-  theme(axis.text = element_text(size = 12),
-        axis.title = element_text(size = 15, colour = "black", face = "bold"),
-        panel.border = element_rect(linewidth = 1, colour = "black"),
-        legend.text = element_text(size = 10), legend.position = "none",
-        legend.title = element_text(size = 12, face = "bold"), panel.grid = element_blank())
 
-
-mapplot.N <- ggarrange(mapplot, ncol = 1, nrow = 1, labels = "A")
-
-mapplot.N
+# mapplot.N <- ggarrange(mapplot, ncol = 1, nrow = 1, labels = "A")
+# 
+# mapplot.N
 
 
 #pdf("RDA1-3v2.pdf") # Fig. 2
@@ -2369,15 +2583,26 @@ write.table(GeoDist, file = "0_Data/GeoDist.txt", row.names = F,
             col.names = F, quote = F)
 
 ##### Load data for isolation analyses #####
-GeoDist <- read.table('0_Data/GeoDist.txt')
-neiD <- read.table('4_GeneticDiversity/maf02_neiD.txt')
+# GeoDist <- read.table('0_FRLA_data/north/data/GeoDist.txt')
+# neiD <- read.table('0_FRLA_data/north/data/neiD.txt')
+# 
+# PopOrder <- neiD[,1]
+# 
+# neiD <- neiD[,-1]
+# 
+# Env <- read.csv("0_FRLA_data/north/data/n_env_final_AEM.csv")
+# Env <- Env[,6:ncol(Env)]
+# EnvDist <- as.matrix(dist(Env))
+
+GeoDist <- read.table('0_FRLA_data/north/data/GeoDist.txt')
+neiD <- read.table('0_FRLA_data/north/data/North_maf02_neiD.txt')
 
 PopOrder <- neiD[,1]
 
 neiD <- neiD[,-1]
 
-Env <- read.csv("0_Data/env_final.csv")
-Env <- Env[,5:ncol(Env)] # Check which columns hace the environmental data you want!
+Env <- read.csv("0_FRLA_data/north/data/")
+Env <- Env[,3:ncol(Env)] # Check which columns hace the environmental data you want!
 EnvDist <- as.matrix(dist(Env))
 
 ##### IBD, IBE #####
@@ -2416,6 +2641,7 @@ IBD_plot <- ggplot(data=IBD_df,aes(x=geo,y=neiD)) +
         #legend.position = "bottom",
         legend.position = 'none',
         legend.title = element_text(size = 13, face = "bold"))
+ggsave(filename = "10_PlotsForPaper/IBD.pdf", plot = IBD_plot) #### HELP ####
 
 #neiD env 
 IBE_plot <- ggplot(data=IBD_df,aes(x=env/100,y=neiD)) + 
@@ -2433,6 +2659,7 @@ IBE_plot <- ggplot(data=IBD_df,aes(x=env/100,y=neiD)) +
         #legend.position = "bottom",
         legend.position = 'none',
         legend.title = element_text(size = 13, face = "bold"))
+ggsave(filename = "10_PlotsForPaper/IBE.pdf", plot = IBE_plot) #### HELP ####
 
 ### Geo Env ###
 EBD_plot <- ggplot(data=IBD_df,aes(x=geo,y=env/100)) + 
@@ -2450,7 +2677,7 @@ EBD_plot <- ggplot(data=IBD_df,aes(x=geo,y=env/100)) +
         #legend.position = "bottom",
         legend.position = 'none',
         legend.title = element_text(size = 13, face = "bold"))
-
+ggsave(filename = "10_PlotsForPaper/EBD.pdf", plot = EBD_plot) #### HELP ####
 
 ##### plot all #####
 
@@ -2459,6 +2686,22 @@ IBD_IBE_plot
 ggsave('7_GEA/IBD_IBE_plot.pdf',IBD_IBE_plot,height = 6,width=12)
 
 ##### varpart #####
+# GeoDist <- read.table('0_FRLA_data/north/data/GeoDist.txt')
+# neiD <- read.table('0_FRLA_data/north/data/neiD.txt')
+# 
+# PopOrder <- neiD[,1]
+# 
+# neiD <- neiD[,-1]
+# 
+# Env <- read.csv("0_FRLA_data/north/data/n_env_final_AEM.csv")
+# LatLon <- Env[,3:4]
+# Env <- Env[,-c(1:2)]
+# EnvDist <- as.matrix(dist(Env))
+# 
+# vp <- vegan::varpart(Y = neiD, ~ Latitude+Longitude, ~ Elevation+FFP+MAP+MAT+RH+PAS, data = Env)
+# summary(vp)
+
+
 GeoDist <- read.table('0_Data/GeoDist.txt')
 neiD <- read.table('4_GeneticDiversity/maf02_neiD.txt')
 
